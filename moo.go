@@ -49,27 +49,46 @@ type compiledRules struct {
 
 // Lexer represents a stateful lexer.
 type Lexer struct {
-	startState   string
-	states       map[string]*compiledRules
-	buffer       string
-	index        int
-	line         int
-	col          int
-	state        string
-	stack        []string
-	groups       []*rule
-	re           *regexp.Regexp
-	fast         map[byte]*rule
-	errorRule    *rule
-	queuedGroup  *rule
-	queuedText   string
+	startState  string
+	states      map[string]*compiledRules
+	buffer      string
+	index       int
+	line        int
+	col         int
+	state       string
+	stack       []string
+	groups      []*rule
+	re          *regexp.Regexp
+	fast        map[byte]*rule
+	errorRule   *rule
+	queuedGroup *rule
+	queuedText  string
 }
 
 // KeywordTransform creates a type transform function for keywords.
+//
 // It returns a function that maps keyword strings to their token types.
+// This is useful for distinguishing keywords from identifiers.
+//
+// The keywords map can contain:
+//   - string values: map[string]interface{}{"KW_IF": "if"}
+//   - string slices: map[string]interface{}{"KW": []string{"if", "while"}}
+//
+// Example:
+//
+//	keywordMap := map[string]interface{}{
+//	    "KW_IF":    "if",
+//	    "KW_WHILE": "while",
+//	}
+//	spec := map[string]interface{}{
+//	    "identifier": map[string]interface{}{
+//	        "match": regexp.MustCompile(`[a-z]+`),
+//	        "type":  moo.KeywordTransform(keywordMap),
+//	    },
+//	}
 func KeywordTransform(keywords map[string]interface{}) func(string) string {
 	keywordMap := make(map[string]string)
-	
+
 	for tokenType, v := range keywords {
 		switch kw := v.(type) {
 		case string:
@@ -80,7 +99,7 @@ func KeywordTransform(keywords map[string]interface{}) func(string) string {
 			}
 		}
 	}
-	
+
 	return func(text string) string {
 		if t, ok := keywordMap[text]; ok {
 			return t
@@ -96,21 +115,37 @@ var Error = map[string]interface{}{"error": true}
 var Fallback = map[string]interface{}{"fallback": true}
 
 // Compile compiles a set of token rules into a Lexer.
+//
+// The spec is a map where keys are token type names and values can be:
+//   - A string literal: "("
+//   - A *regexp.Regexp: regexp.MustCompile(`[0-9]+`)
+//   - An array of strings: []string{"if", "while"}
+//   - A map with options: map[string]interface{}{"match": regexp.MustCompile(...), "lineBreaks": true}
+//
+// Example:
+//
+//	spec := map[string]interface{}{
+//	    "WS":     regexp.MustCompile(`[ \t]+`),
+//	    "number": regexp.MustCompile(`[0-9]+`),
+//	    "lparen": "(",
+//	    "keyword": []string{"if", "while"},
+//	}
+//	lexer, err := moo.Compile(spec)
 func Compile(spec map[string]interface{}) (*Lexer, error) {
 	rules, err := objectToRules(spec)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	compiled, err := compileRules(rules, false)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	states := map[string]*compiledRules{
 		"start": compiled,
 	}
-	
+
 	return &Lexer{
 		startState: "start",
 		states:     states,
@@ -121,7 +156,35 @@ func Compile(spec map[string]interface{}) (*Lexer, error) {
 	}, nil
 }
 
-// States compiles a set of states with their respective rules.
+// States compiles a set of states with their respective rules into a stateful Lexer.
+//
+// Each state is defined by a map of token rules, similar to Compile.
+// The lexer starts in the 'start' state (or the first state if start is empty).
+//
+// Rules can include state transitions:
+//   - "next": "stateName" - switch to a state
+//   - "push": "stateName" - push current state and switch to new state
+//   - "pop": true - pop state from stack
+//
+// Example:
+//
+//	stateSpec := map[string]map[string]interface{}{
+//	    "main": {
+//	        "word": regexp.MustCompile(`[a-z]+`),
+//	        "lbrace": map[string]interface{}{
+//	            "match": "{",
+//	            "push":  "braced",
+//	        },
+//	    },
+//	    "braced": {
+//	        "word": regexp.MustCompile(`[a-z]+`),
+//	        "rbrace": map[string]interface{}{
+//	            "match": "}",
+//	            "pop":   true,
+//	        },
+//	    },
+//	}
+//	lexer, err := moo.States(stateSpec, "main")
 func States(stateSpec map[string]map[string]interface{}, start string) (*Lexer, error) {
 	if start == "" {
 		// Use first key as start state
@@ -130,23 +193,23 @@ func States(stateSpec map[string]map[string]interface{}, start string) (*Lexer, 
 			break
 		}
 	}
-	
+
 	compiledStates := make(map[string]*compiledRules)
-	
+
 	for stateName, spec := range stateSpec {
 		rules, err := objectToRules(spec)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		compiled, err := compileRules(rules, true)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		compiledStates[stateName] = compiled
 	}
-	
+
 	return &Lexer{
 		startState: start,
 		states:     compiledStates,
@@ -158,6 +221,13 @@ func States(stateSpec map[string]map[string]interface{}, start string) (*Lexer, 
 }
 
 // Reset resets the lexer with new input.
+//
+// This empties the internal buffer, resets position counters (line, col, offset)
+// to their initial values, clears the state stack, and sets the state to the start state.
+//
+// Example:
+//
+//	lexer.Reset("new input string")
 func (l *Lexer) Reset(data string) {
 	l.buffer = data
 	l.index = 0
@@ -174,7 +244,7 @@ func (l *Lexer) setState(state string) {
 	if state == "" || l.state == state {
 		return
 	}
-	
+
 	l.state = state
 	if info, ok := l.states[state]; ok {
 		l.groups = info.groups
@@ -184,10 +254,29 @@ func (l *Lexer) setState(state string) {
 	}
 }
 
-// Next returns the next token, or nil if EOF is reached.
+// Next returns the next token from the input, or nil if EOF is reached.
+//
+// The returned Token contains:
+//   - Type: the token type name
+//   - Value: the token value (possibly transformed)
+//   - Text: the original matched text
+//   - Offset: byte offset from start of buffer
+//   - Line: line number (1-indexed)
+//   - Col: column number (1-indexed)
+//   - LineBreaks: number of line breaks in the token
+//
+// Example:
+//
+//	for {
+//	    token := lexer.Next()
+//	    if token == nil {
+//	        break // EOF
+//	    }
+//	    fmt.Printf("Type: %s, Value: %s\n", token.Type, token.Value)
+//	}
 func (l *Lexer) Next() *Token {
 	index := l.index
-	
+
 	// If a fallback token matched, we don't need to re-run the RegExp
 	if l.queuedGroup != nil {
 		token := l.makeToken(l.queuedGroup, l.queuedText, index)
@@ -195,12 +284,12 @@ func (l *Lexer) Next() *Token {
 		l.queuedText = ""
 		return token
 	}
-	
+
 	buffer := l.buffer
 	if index >= len(buffer) {
 		return nil // EOF
 	}
-	
+
 	// Fast matching for single characters
 	if len(l.fast) > 0 && index < len(buffer) {
 		ch := buffer[index]
@@ -208,28 +297,28 @@ func (l *Lexer) Next() *Token {
 			return l.makeToken(group, string(ch), index)
 		}
 	}
-	
+
 	// Execute RegExp
 	re := l.re
 	text := buffer[index:]
 	match := re.FindStringSubmatchIndex(text)
-	
+
 	// Error tokens match the remaining buffer
 	if match == nil || match[0] != 0 {
 		return l.makeToken(l.errorRule, buffer[index:], index)
 	}
-	
+
 	// Find which group matched
 	group := l.getGroup(match)
 	matchedText := text[match[0]:match[1]]
-	
+
 	// Handle fallback
 	if l.errorRule.fallback && match[0] != 0 {
 		l.queuedGroup = group
 		l.queuedText = matchedText
 		return l.makeToken(l.errorRule, buffer[index:index+match[0]], index)
 	}
-	
+
 	return l.makeToken(group, matchedText, index)
 }
 
@@ -254,7 +343,7 @@ func (l *Lexer) makeToken(group *rule, text string, offset int) *Token {
 	if group.lineBreaks {
 		lineBreaks = strings.Count(text, "\n")
 	}
-	
+
 	// Determine token type
 	tokenType := group.defaultType
 	if group.typeFunc != nil {
@@ -262,13 +351,13 @@ func (l *Lexer) makeToken(group *rule, text string, offset int) *Token {
 			tokenType = t
 		}
 	}
-	
+
 	// Determine token value
 	value := text
 	if group.value != nil {
 		value = group.value(text)
 	}
-	
+
 	token := &Token{
 		Type:       tokenType,
 		Value:      value,
@@ -278,12 +367,12 @@ func (l *Lexer) makeToken(group *rule, text string, offset int) *Token {
 		Line:       l.line,
 		Col:        l.col,
 	}
-	
+
 	// Update position
 	size := len(text)
 	l.index += size
 	l.line += lineBreaks
-	
+
 	if lineBreaks > 0 {
 		// Find position after last newline
 		lastNL := strings.LastIndex(text, "\n")
@@ -291,12 +380,12 @@ func (l *Lexer) makeToken(group *rule, text string, offset int) *Token {
 	} else {
 		l.col += size
 	}
-	
+
 	// Throw error if required
 	if group.shouldThrow {
 		panic(fmt.Sprintf("invalid syntax at line %d col %d", token.Line, token.Col))
 	}
-	
+
 	// Handle state changes
 	if group.pop {
 		l.popState()
@@ -305,7 +394,7 @@ func (l *Lexer) makeToken(group *rule, text string, offset int) *Token {
 	} else if group.next != "" {
 		l.setState(group.next)
 	}
-	
+
 	return token
 }
 
@@ -324,11 +413,22 @@ func (l *Lexer) pushState(state string) {
 	l.setState(state)
 }
 
-// Save saves the current lexer state.
+// Save saves the current lexer state for later restoration.
+//
+// The returned map contains the current line, column, state, and state stack.
+// This can be used to restore the lexer to the same position later.
+//
+// Example:
+//
+//	state := lexer.Save()
+//	// ... do some tokenization ...
+//	// Later, restore:
+//	lexer.Reset(originalInput)
+//	// Apply state from Save() as needed
 func (l *Lexer) Save() map[string]interface{} {
 	stackCopy := make([]string, len(l.stack))
 	copy(stackCopy, l.stack)
-	
+
 	return map[string]interface{}{
 		"line":  l.line,
 		"col":   l.col,
@@ -337,12 +437,21 @@ func (l *Lexer) Save() map[string]interface{} {
 	}
 }
 
-// FormatError formats a token error message.
+// FormatError formats a token error message with line and column information.
+//
+// This is useful for generating user-friendly error messages when parsing fails.
+//
+// Example:
+//
+//	if token.Type == "error" {
+//	    msg := lexer.FormatError(token, "unexpected character")
+//	    fmt.Println(msg) // "unexpected character at line 2 col 5"
+//	}
 func (l *Lexer) FormatError(token *Token, message string) string {
 	if token == nil {
 		return message
 	}
-	
+
 	return fmt.Sprintf("%s at line %d col %d", message, token.Line, token.Col)
 }
 
@@ -350,7 +459,7 @@ func (l *Lexer) FormatError(token *Token, message string) string {
 
 func objectToRules(spec map[string]interface{}) ([]*rule, error) {
 	var rules []*rule
-	
+
 	for name, value := range spec {
 		r, err := parseRule(name, value)
 		if err != nil {
@@ -358,13 +467,13 @@ func objectToRules(spec map[string]interface{}) ([]*rule, error) {
 		}
 		rules = append(rules, r...)
 	}
-	
+
 	return rules, nil
 }
 
 func parseRule(name string, value interface{}) ([]*rule, error) {
 	var rules []*rule
-	
+
 	switch v := value.(type) {
 	case string:
 		// String literal
@@ -373,7 +482,7 @@ func parseRule(name string, value interface{}) ([]*rule, error) {
 			match:       []*regexp.Regexp{regexp.MustCompile(regexp.QuoteMeta(v))},
 			lineBreaks:  false,
 		})
-		
+
 	case *regexp.Regexp:
 		// Regular expression
 		rules = append(rules, &rule{
@@ -381,7 +490,7 @@ func parseRule(name string, value interface{}) ([]*rule, error) {
 			match:       []*regexp.Regexp{v},
 			lineBreaks:  false,
 		})
-		
+
 	case []string:
 		// Array of string literals (e.g., keywords)
 		for _, s := range v {
@@ -391,26 +500,26 @@ func parseRule(name string, value interface{}) ([]*rule, error) {
 				lineBreaks:  false,
 			})
 		}
-		
+
 	case map[string]interface{}:
 		// Rule object with options
 		r := &rule{
 			defaultType: name,
 			lineBreaks:  false,
 		}
-		
+
 		// Check for special markers
 		if _, isError := v["error"]; isError {
 			r.error = true
 			r.lineBreaks = true
 			r.shouldThrow = true
 		}
-		
+
 		if _, isFallback := v["fallback"]; isFallback {
 			r.fallback = true
 			r.lineBreaks = true
 		}
-		
+
 		// Parse match
 		if matchVal, ok := v["match"]; ok {
 			switch m := matchVal.(type) {
@@ -420,12 +529,12 @@ func parseRule(name string, value interface{}) ([]*rule, error) {
 				r.match = []*regexp.Regexp{m}
 			}
 		}
-		
+
 		// Parse lineBreaks
 		if lb, ok := v["lineBreaks"].(bool); ok {
 			r.lineBreaks = lb
 		}
-		
+
 		// Parse state changes
 		if next, ok := v["next"].(string); ok {
 			r.next = next
@@ -436,20 +545,20 @@ func parseRule(name string, value interface{}) ([]*rule, error) {
 		if pop, ok := v["pop"].(bool); ok {
 			r.pop = pop
 		}
-		
+
 		// Parse value transform
 		if valFunc, ok := v["value"].(func(string) string); ok {
 			r.value = valFunc
 		}
-		
+
 		// Parse type transform
 		if typeFunc, ok := v["type"].(func(string) string); ok {
 			r.typeFunc = typeFunc
 		}
-		
+
 		rules = append(rules, r)
 	}
-	
+
 	return rules, nil
 }
 
@@ -458,14 +567,14 @@ func compileRules(rules []*rule, hasStates bool) (*compiledRules, error) {
 	fast := make(map[byte]*rule)
 	var groups []*rule
 	var parts []string
-	
+
 	// Default error rule
 	defaultErrorRule := &rule{
 		defaultType: "error",
 		lineBreaks:  true,
 		shouldThrow: true,
 	}
-	
+
 	for _, r := range rules {
 		if r.error || r.fallback {
 			if errorRule != nil {
@@ -473,7 +582,7 @@ func compileRules(rules []*rule, hasStates bool) (*compiledRules, error) {
 			}
 			errorRule = r
 		}
-		
+
 		// Fast path for single-character strings
 		if len(r.match) > 0 && len(fast) < 256 {
 			// Check if this is a single-character match
@@ -485,17 +594,17 @@ func compileRules(rules []*rule, hasStates bool) (*compiledRules, error) {
 				}
 			}
 		}
-		
+
 		// Add to groups if has match
 		if len(r.match) > 0 {
 			groups = append(groups, r)
-			
+
 			// Combine all match patterns for this rule
 			var ruleParts []string
 			for _, re := range r.match {
 				ruleParts = append(ruleParts, re.String())
 			}
-			
+
 			// Wrap in capturing group
 			if len(ruleParts) == 1 {
 				parts = append(parts, "("+ruleParts[0]+")")
@@ -504,22 +613,22 @@ func compileRules(rules []*rule, hasStates bool) (*compiledRules, error) {
 			}
 		}
 	}
-	
+
 	if errorRule == nil {
 		errorRule = defaultErrorRule
 	}
-	
+
 	// Combine all parts into single regexp
 	combined := strings.Join(parts, "|")
 	if combined == "" {
 		combined = "(?!)" // Never matches
 	}
-	
+
 	re, err := regexp.Compile(combined)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &compiledRules{
 		regexp: re,
 		groups: groups,

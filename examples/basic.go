@@ -12,19 +12,19 @@ func main() {
 	// Example 1: Basic tokenization
 	fmt.Println("=== Example 1: Basic Tokenization ===")
 	basicExample()
-	
+
 	// Example 2: Keywords
 	fmt.Println("\n=== Example 2: Keywords ===")
 	keywordsExample()
-	
+
 	// Example 3: Line numbers
 	fmt.Println("\n=== Example 3: Line Numbers ===")
 	lineNumbersExample()
-	
+
 	// Example 4: Value transforms
 	fmt.Println("\n=== Example 4: Value Transforms ===")
 	valueTransformExample()
-	
+
 	// Example 5: Stateful lexing
 	fmt.Println("\n=== Example 5: Stateful Lexing ===")
 	statefulExample()
@@ -38,14 +38,14 @@ func basicExample() {
 		"lparen": "(",
 		"rparen": ")",
 	}
-	
+
 	lexer, err := moo.Compile(spec)
 	if err != nil {
 		panic(err)
 	}
-	
+
 	lexer.Reset("hello (123) world")
-	
+
 	for {
 		token := lexer.Next()
 		if token == nil {
@@ -60,7 +60,7 @@ func keywordsExample() {
 	keywordMap := map[string]interface{}{
 		"KW": []string{"if", "while", "else", "for"},
 	}
-	
+
 	spec := map[string]interface{}{
 		"identifier": map[string]interface{}{
 			"match": regexp.MustCompile(`[a-z]+`),
@@ -68,10 +68,10 @@ func keywordsExample() {
 		},
 		"WS": regexp.MustCompile(`[ \t]+`),
 	}
-	
+
 	lexer, _ := moo.Compile(spec)
 	lexer.Reset("if foo while bar")
-	
+
 	for {
 		token := lexer.Next()
 		if token == nil {
@@ -92,10 +92,10 @@ func lineNumbersExample() {
 		},
 		"WS": regexp.MustCompile(`[ \t]+`),
 	}
-	
+
 	lexer, _ := moo.Compile(spec)
 	lexer.Reset("hello\nworld\nfoo")
-	
+
 	for {
 		token := lexer.Next()
 		if token == nil {
@@ -124,10 +124,10 @@ func valueTransformExample() {
 		},
 		"WS": regexp.MustCompile(`[ \t]+`),
 	}
-	
+
 	lexer, _ := moo.Compile(spec)
 	lexer.Reset(`"hello" 123 "world"`)
-	
+
 	for {
 		token := lexer.Next()
 		if token == nil {
@@ -143,7 +143,7 @@ func statefulExample() {
 	// Tokenize nested braces
 	stateSpec := map[string]map[string]interface{}{
 		"main": {
-			"word":   regexp.MustCompile(`[a-z]+`),
+			"word": regexp.MustCompile(`[a-z]+`),
 			"lbrace": map[string]interface{}{
 				"match": "{",
 				"push":  "braced",
@@ -151,8 +151,8 @@ func statefulExample() {
 			"WS": regexp.MustCompile(`[ \t]+`),
 		},
 		"braced": {
-			"word":   regexp.MustCompile(`[a-z]+`),
-			"colon":  ":",
+			"word":  regexp.MustCompile(`[a-z]+`),
+			"colon": ":",
 			"rbrace": map[string]interface{}{
 				"match": "}",
 				"pop":   true,
@@ -160,10 +160,10 @@ func statefulExample() {
 			"WS": regexp.MustCompile(`[ \t]+`),
 		},
 	}
-	
+
 	lexer, _ := moo.States(stateSpec, "main")
 	lexer.Reset("hello {foo: bar} world")
-	
+
 	for {
 		token := lexer.Next()
 		if token == nil {
