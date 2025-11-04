@@ -15,6 +15,7 @@ Moo is a highly-optimised tokenizer/lexer generator. Use it to tokenize your str
 * is even [Iterable](#iteration)
 * has no dependencies
 * 4KB minified + gzipped
+* **Now available in Go!** See [README_GO.md](README_GO.md)
 * Moo!
 
 Is it fast?
